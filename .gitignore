@@ -1,0 +1,6 @@
+poetry.lock
+pyproject.toml
+__pycache__/
+aiohttp_jinja2/
+mcstatus/
+.env

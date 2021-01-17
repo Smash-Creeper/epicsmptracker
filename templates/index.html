@@ -1,0 +1,562 @@
+{% extends "base.html" %}
+
+{% block head %}
+{{ super() }}
+<style>
+body {
+	font-family: sans-serif;
+	margin: 0
+}
+.user {
+	font-size: 3rem;
+}
+.avatar {
+	height: 1em;
+	image-rendering: crisp-edges;
+	image-rendering: pixelated;
+}
+.ign {
+	padding: 0;
+	top: -.1em;
+	position: relative;
+}
+#main-title {
+	text-align: center;
+	font-size: 5rem;
+	margin-bottom: 0;
+}
+#player-list {
+	width: max-content;
+	margin: 1em auto;
+}
+#history {
+	position: relative;
+	margin: 0 auto;
+	width: 80vw;
+	height: 50vh;
+}
+#history > canvas {
+	position: absolute;
+	left: 0;
+	top: 0;
+	pointer-events:none;
+}
+.chartAreaWrapper {
+	overflow-x: scroll;
+	position: relative;
+	width: 100%;
+	height: 100%;
+	scrollbar-color: #222 rgba(0,0,0,0);
+}
+.chartAreaWrapper::-webkit-scrollbar {
+	background-color: rgba(0,0,0,0);
+}
+.chartAreaWrapper::-webkit-scrollbar-thumb {
+	background-color: #222;
+}
+.chartAreaWrapper2 {
+	position: relative;
+	height: 100%;
+	width: {{ (history[0].time - history[-1].time).total_seconds() // 1080 }}em
+}
+.tooltipStreamTitle {
+	opacity: .5;
+	font-style: italic;
+}
+#chartjs-tooltip {
+	opacity: 1;
+	position: absolute;
+	background: rgba(0, 0, 0, .7);
+	color: white;
+	border-radius: 3px;
+	pointer-events: none;
+	-webkit-transform: translate(-50%, 0);
+	transform: translate(-50%, 0);
+}
+
+.chartjs-tooltip-key {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin-right: 10px;
+}
+.user.offline {
+	opacity: .5
+}
+.playtime {
+	font-size: .5em;
+	bottom: .5em;
+	position: relative;
+	opacity: .5;
+	transition-duration: 400ms;
+	cursor: pointer
+}
+.playtime:hover, .playtime.active {
+	opacity: 1
+}
+#subtitle {
+	text-align: center;
+	opacity: .5
+}
+.streamLink {
+	color: inherit;
+	text-decoration: none;
+}
+#github-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: 2em;
+	height: 2em;
+	margin: .5em;
+	opacity: .1;
+	transition-duration: 200ms
+}
+#github-button:hover {
+	opacity: .5
+}
+#github-button img {
+	width: 100%;
+	height: 100%;
+}
+a {
+	color: #5af;
+}
+footer {
+	text-align: center;
+	margin-bottom: 1em;
+	opacity: .7
+}
+footer .twitter {
+	height: 1.5em;
+	width: 1.5em;
+	position: relative;
+	top: .45em;
+}
+
+@media only screen and (max-width: 450px) {
+  #main-title {
+    font-size: 4rem
+  }
+}
+
+@media only screen and (max-width: 700px) {
+  .user {
+    font-size: 2rem
+  }
+}
+@media only screen and (max-width: 460px) {
+  .user {
+    font-size: 1.5rem
+  }
+}
+
+/* dark theme */
+body {
+	background-color: #111;
+	color: #eee
+}
+</style>
+<script>
+
+document.addEventListener('DOMContentLoaded', () => {
+
+const indexedHistory = [
+	{% for state in history %}[{% for player in state.players %}'{{ player }}',{% endfor %}],{% endfor %}
+]
+const indexedLiveHistory = [
+	{% for state in history %}[{% for player in state.live %}'{{ player }}',{% endfor %}],{% endfor %}
+]
+const indexedTitlesHistory = [
+	{% for state in history -%}
+	{
+		{%- for player in state.titles -%}
+			'{{ player }}': '{{ state.titles[player] }}',
+		{%- endfor -%}
+	},
+	{%- endfor %}
+]
+
+const allPlayers = [
+	{% for player in players_list %}{uuid:'{{ player.uuid }}',username:'{{ player.username }}'},{% endfor %}
+]
+
+window.addEventListener('mousemove', (e) => {
+	let tooltipEl = document.getElementById('chartjs-tooltip')
+	window.mouseX = event.pageX
+	window.mouseY = event.pageY
+	if (tooltipEl) {
+		tooltipEl.style.left = window.mouseX + 'px'
+	}
+}, false)
+
+function customTooltip(tooltipModel) {
+	let tooltipEl = document.getElementById('chartjs-tooltip')
+
+	// Create element on first render
+	if (!tooltipEl) {
+		tooltipEl = document.createElement('div')
+		tooltipEl.id = 'chartjs-tooltip'
+		tooltipEl.innerHTML = '<table></table>'
+		document.body.appendChild(tooltipEl)
+	}
+
+	// Hide if no tooltip
+	if (tooltipModel.opacity === 0) {
+		tooltipEl.style.opacity = 0
+		return
+	}
+
+	// Set caret Position
+	tooltipEl.classList.remove('above', 'below', 'no-transform');
+	if (tooltipModel.yAlign) {
+		tooltipEl.classList.add(tooltipModel.yAlign);
+	} else {
+		tooltipEl.classList.add('no-transform');
+	}
+
+	let index = tooltipModel.dataPoints[0].index
+	if (indexedHistory[index].length === 0) index += 1
+	if (indexedHistory[index].length === 0) index += 1
+
+	let historicOnlinePlayers = indexedHistory[index]
+	let historicStreamingPlayers = indexedLiveHistory[index]
+	let historicUuidToTitles = indexedTitlesHistory[index]
+
+	// Set Text
+	var titleLines = tooltipModel.title || []
+	var bodyLines = []
+	for (const playerUuid of historicOnlinePlayers) {
+		let playerUsername = playerUuid // if the username is unknown just use the uuid
+		let player = allPlayers.find(p => p.uuid === playerUuid)
+		let isLive = historicStreamingPlayers.includes(playerUuid)
+		let streamTitle = historicUuidToTitles[playerUuid]
+		if (player) playerUsername = player.username
+		bodyLines.push(
+			`<img src="https://crafatar.com/avatars/${playerUuid}?overlay=true&size=16" class="avatar" style="margin-right:.2em">${playerUsername}${isLive ? ` {{ streamingsvg|safe }}` : ""}${streamTitle ? ` <span class="tooltipStreamTitle">(${streamTitle})</span>` : ""}`
+		)
+	}
+
+	var innerHtml = '<thead>'
+
+	titleLines.forEach((title) => {
+		innerHtml += '<tr><th>' + title + '</th></tr>'
+	})
+	innerHtml += '</thead><tbody>'
+
+	bodyLines.forEach((body, i) => {
+		var span = '<span style="border-width: 2px"></span>'
+		innerHtml += '<tr><td>' + span + body + '</td></tr>'
+	})
+	innerHtml += '</tbody>'
+
+	var tableRoot = tooltipEl.querySelector('table')
+	tableRoot.innerHTML = innerHtml
+
+	// `this` will be the overall tooltip
+	var position = this._chart.canvas.getBoundingClientRect()
+
+	// Display, position, and set styles for font
+	tooltipEl.style.opacity = 1
+	tooltipEl.style.position = 'absolute'
+	{# tooltipEl.style.left = position.left + window.pageXOffset + tooltipModel.caretX + 'px' #}
+	tooltipEl.style.left = window.mouseX + 'px'
+	tooltipEl.style.top = position.top + window.pageYOffset + tooltipModel.caretY + 'px'
+	tooltipEl.style.fontFamily = tooltipModel._bodyFontFamily
+	tooltipEl.style.fontSize = tooltipModel.bodyFontSize + 'px'
+	tooltipEl.style.fontStyle = tooltipModel._bodyFontStyle
+	tooltipEl.style.padding = tooltipModel.yPadding + 'px ' + tooltipModel.xPadding + 'px'
+	tooltipEl.style.pointerEvents = 'none'
+}
+
+Chart.defaults.coloredLine = Chart.defaults.line
+Chart.controllers.coloredLine = Chart.controllers.line.extend({
+	draw: function(ease) {
+		var
+			startIndex = 0,
+			meta = this.getMeta(),
+			points = meta.data || [],
+			colors = this.getDataset().colors,
+			area = this.chart.chartArea,
+			originalDatasets = meta.dataset._children
+				.filter(function(data) {
+					return !isNaN(data._view.y)
+				})
+
+		function _setColor(newColor, meta) {
+			meta.dataset._view.borderColor = newColor
+		}
+
+		if (!colors) {
+			Chart.controllers.line.prototype.draw.call(this, ease)
+			return
+		}
+
+		for (var i = 2; i <= colors.length; i++) {
+			if (colors[i-1] !== colors[i]) {
+				_setColor(colors[i-1], meta)
+				meta.dataset._children = originalDatasets.slice(startIndex, i)
+				meta.dataset.draw()
+				startIndex = i - 1
+			}
+		}
+
+		meta.dataset._children = originalDatasets.slice(startIndex);
+		meta.dataset.draw()
+		meta.dataset._children = originalDatasets
+
+		points.forEach((point) => {
+			point.draw(area)
+		})
+	}
+})
+
+const data = [
+	{%- for state in history -%}
+	{x: new Date('{{ state.time.isoformat() }}'), y: {{ state.players|length }}},
+	{%- endfor -%}
+]
+
+Chart.Tooltip.positioners.cursor = function(chartElements, coordinates) {
+  return coordinates
+}
+
+const ctx = document.getElementById('historyChart').getContext('2d')
+const chart = new Chart(ctx, {
+	type: 'coloredLine',
+	data: {
+		datasets: [{
+			label: 'Online',
+			data: data,
+			borderWidth: 2,
+			borderColor: 'rgba(0,255,0,.5)',
+			backgroundColor: 'rgba(0,255,0,.2)',
+			fill: false
+		}],
+		allData: [data]
+	},
+	options: {
+		responsive: true,
+		maintainAspectRatio: false,
+		scales: {
+			yAxes: [{
+				ticks: {
+					beginAtZero: true,
+				},
+				gridLines: {
+					display: false,
+				}
+			}],
+			xAxes: [{
+				type: 'time',
+				time: {
+					unit: 'hour',
+				},
+				ticks: {
+					major: {
+						enabled: true,
+						fontStyle: 'bold',
+					},
+					autoSkip: false,
+    				maxTicksLimit: 500,
+				},
+				gridLines: {
+					display: false,
+				}
+			}]
+		},
+		tooltips: {
+			enabled: false,
+			intersect: false,
+			custom: customTooltip,
+			mode: 'index',
+			position: 'average'
+		},
+		elements: {
+			point: {
+				radius: 0
+			},
+			line: {
+				tension: 0 // disables bezier curves
+			}
+		},
+		legend: {
+			display: false
+		},
+		animation: {
+			{# onComplete: function(animation) {
+				if (!chart) return
+				var sourceCanvas = chart.chart.canvas
+				var copyWidth = chart.scales['y-axis-0'].width - 10
+				var copyHeight = chart.scales['y-axis-0'].height + chart.scales['y-axis-0'].top + 10
+				var targetCtx = document.getElementById('historyChartAxis').getContext('2d')
+				targetCtx.canvas.width = copyWidth
+				targetCtx.canvas.height = copyHeight
+				targetCtx.drawImage(sourceCanvas, 0, 0, copyWidth, copyHeight, 0, 0, copyWidth, copyHeight)
+			}, #}
+			duration: 0
+		},
+		hover: {
+			animationDuration: 0 // duration of animations when hovering an item
+		},
+		responsiveAnimationDuration: 0 // animation duration after a resize
+	}
+})
+
+let chartAreaWrapper = document.getElementsByClassName('chartAreaWrapper')[0]
+chartAreaWrapper.scrollTo(chartAreaWrapper.scrollWidth, 0)
+
+
+{# chartAreaWrapper.addEventListener('scroll', () => {
+	const firstPoint = data[0]
+	const lastPoint = data[data.length - 1]
+
+	const firstPointX = firstPoint.x / 1000
+	const lastPointX = lastPoint.x / 1000
+
+	const totalWidth = ((firstPointX - lastPointX) / 1080) * 16
+
+	const chartScroll = chartAreaWrapper.scrollLeft
+
+	const newData = []
+	newData.push({
+		x: firstPoint.x,
+		y: NaN
+	})
+	for (let itemIndex=0;itemIndex<data.length;itemIndex++) {
+		const item = data[itemIndex]
+		const itemBefore = itemIndex === 0 ? firstPoint : data[itemIndex - 1]
+		const itemAfter = itemIndex === data.length - 1 ? lastPoint : data[itemIndex + 1]
+
+		const itemPosition = totalWidth - (((firstPointX - item.x / 1000) * 16) / 1080)
+		const itemBeforePosition = totalWidth - (((firstPointX - itemBefore.x / 1000) * 16) / 1080)
+		const itemAfterPosition = totalWidth - (((firstPointX - itemAfter.x / 1000) * 16) / 1080)
+		if (
+			itemBeforePosition > chartScroll
+			&& itemAfterPosition < chartScroll + chartAreaWrapper.offsetWidth
+		) {
+			newData.push(item)
+		}
+	}
+	newData.push({
+		x: lastPoint.x,
+		y: NaN
+	})
+	console.log(newData.length)
+	chart.data.datasets[0].data = newData
+	chart.update()
+}) #}
+
+function highlightPlayerHistory(uuid) {
+	chart.data.datasets[0].colors = []
+	if (uuid)
+		for (let i in indexedHistory) {
+			const historyItem = indexedHistory[i]
+			const liveHistoryItem = indexedLiveHistory[i]
+			let color = (
+				// definitely not cursed and very readable code
+				historyItem.includes(uuid)
+				? (liveHistoryItem.includes(uuid) ? 'rgba(255,0,0,.5)' : 'rgba(0,255,0,.5)')
+				: 'rgba(0,255,0,.1)'
+			)
+			chart.data.datasets[0].colors.push(color)
+		}
+	chart.update()
+	let activeUuid = activePlaytimeDisplay
+	if (activeUuid) {
+		let prevEl = document.querySelector(`div[data-uuid='${activeUuid}']`).getElementsByClassName('playtime')[0]
+		prevEl.classList.remove('active')
+	}
+	if (uuid) {
+		let playtimeEl = document.querySelector(`div[data-uuid='${uuid}']`).getElementsByClassName('playtime')[0]
+		playtimeEl.classList.add('active')
+	}
+
+}
+highlightPlayerHistory()
+
+var activePlaytimeDisplay = null
+var clickedPlaytimeDisplay = false
+
+for (playtimeEl of document.getElementsByClassName('playtime')) {
+	let userEl = playtimeEl.parentNode
+	let uuid = userEl.getAttribute('data-uuid')
+	if (uuid) {
+		playtimeEl.addEventListener('mouseover', () => {
+			if (!clickedPlaytimeDisplay) {
+				highlightPlayerHistory(uuid)
+				activePlaytimeDisplay = uuid
+			}
+		})
+		playtimeEl.addEventListener('click', () => {
+			if (activePlaytimeDisplay == uuid && clickedPlaytimeDisplay) {
+				highlightPlayerHistory(null)
+				activePlaytimeDisplay = null
+				clickedPlaytimeDisplay = false
+			} else {
+				highlightPlayerHistory(uuid)
+				activePlaytimeDisplay = uuid
+				clickedPlaytimeDisplay = true
+			}
+		})
+		playtimeEl.addEventListener('mouseout', () => {
+			console.log('mouseout', clickedPlaytimeDisplay)
+			if (activePlaytimeDisplay == uuid && !clickedPlaytimeDisplay)
+				highlightPlayerHistory()
+		})
+	}
+}
+setTimeout(() => {console.log('hm');chart.render()}, 2000)
+})
+</script>
+<script src="//cdn.matdoes.dev/dreamsmp/moment.min.js"></script>
+<script src="//cdn.matdoes.dev/dreamsmp/Chart.min.js"></script>
+{% endblock %}
+{% block body %}
+<span id="github-button"><a href="https://github.com/mat-1/dreamsmp"><img src="https://cdn.matdoes.dev/dreamsmp/github.png"></a></span>
+<header>
+	<h1 id="main-title">Dream SMP</h1>
+	{% if latency %}
+		<p id="subtitle">Players: {{ playercount }}/{{ maxplayers }} • Ping: {{ latency|int }}ms</p>
+	{% endif %}
+</header>
+<div id="history">
+	<div class="chartAreaWrapper">
+		<div class="chartAreaWrapper2">
+			<canvas id="historyChart"></canvas>
+		</div>
+	</div>
+	<canvas id="historyChartAxis" height="100%" width="0"></canvas>
+</div>
+
+{% macro user(player, online) -%}
+	<div class="user {% if online %}online{% else %}offline{% endif %}" data-uuid="{{ player.uuid }}">
+		<img src="https://crafatar.com/avatars/{{ player.uuid }}?overlay=true&size=16" class="avatar">
+		{% if player.live_url %}<a href="{{ player.live_url }}" class="streamLink"{% if player.live_title %} title="{{ player.live_title }}"{% endif %}>{% endif %}
+		<span class="ign">
+			{{ player.name or player.username }}
+		</span>{% if player.live %}<span> {% if player.likely_on_server %}{{ streamingsvg|safe }}{% else %}{{ orangecirclesvg|safe }}{% endif %}</span>{% endif %}
+		{% if player.live_url %}</a>{% endif %}
+		<span class="playtime">{{ playtime(player.uuid) }} on record</span>
+	</div>
+{%- endmacro %}
+
+<div id="player-list">
+	{%- for player in online|playtimesort -%}
+		{%- if player.live -%}
+			{{ user(player, true) }}
+		{%- endif -%}
+	{%- endfor -%}
+	{%- for player in online|playtimesort -%}
+		{%- if not player.live -%}
+			{{ user(player, true) }}
+		{%- endif -%}
+	{%- endfor -%}
+	{%- for player in offline|playtimesort -%}
+		{{ user(player, false) }}
+	{%- endfor -%}
+</div>
+<footer>
+	Made by <a href="https://matdoes.dev">mat</a> <a href="https://twitter.com/matdoesdev"><img src="https://cdn.matdoes.dev/dreamsmp/twitter.png" class="twitter"></a>
+</footer>
+{% endblock %}
